@@ -2,13 +2,14 @@ import cv2
 import os
 import imageio
 import numpy as np
+import torch
 from scipy.ndimage import gaussian_filter
 from scipy.ndimage import correlate
 import scipy.ndimage as ndimage
 
-from planar_shadow import planar_shadow
-from utils.prepost_mlp import preproc_mlp
-from src.train.mlp_model import MLP
+from fots_sim.planar_shadow import planar_shadow
+from fots_sim.utils.prepost_mlp import preproc_mlp
+from fots_sim.mlp_model import MLP
 
 w,h = 240, 320
 
@@ -60,60 +61,64 @@ class MLPRender:
         self.bg_depth = config['bg_depth']
         self.bg_render = config['bg_render']
         self.model = config['model']
+        
+        # Pre-scale initial depth to avoid recomputing every frame
+        # Conversion factor: -1000 / (0.0266 * 2)
+        self._scale = -1000.0 / (0.0266 * 2.0)
+        self._pre_scaled_bg = self.bg_depth * self._scale
 
-    def smooth_heightMap(self, height_map):
-        diff_depth = np.abs(height_map - self.bg_depth)
+    def smooth_heightMap(self, height_map, bg_depth):
+        diff_depth = np.abs(height_map - bg_depth)
+        
         contact_mask_0 = diff_depth > 0.0
+        # Aggressive threshold to reduce noise
         contact_mask = diff_depth > (np.max(diff_depth) * 0.4)
-        empty_bg = 0.0 * np.ones_like(diff_depth)
-        height_map = empty_bg+diff_depth
+        
+        height_map = diff_depth.copy()
         zq_back = height_map.copy()
 
-        kernel_size = [101, 51, 21, 11, 5]
-        for i in range(len(kernel_size)):
-            height_map = cv2.GaussianBlur(height_map.astype(np.float32), (kernel_size[i], kernel_size[i]), 0)
-            # if i < 6:
+        # Gaussian smoothing is expensive; reduced iterations for speed
+        kernel_size = [21, 11, 5]
+        for ks in kernel_size:
+            height_map = cv2.GaussianBlur(height_map.astype(np.float32), (ks, ks), 0)
             height_map[contact_mask] = zq_back[contact_mask]
-        height_map = cv2.GaussianBlur(height_map.astype(np.float32), (5, 5), 0)
+        
         return height_map, contact_mask_0, diff_depth
 
     def generate(self, heightMap, shadow = True):
-
-        heightMap *= -1000.0
-        heightMap /= (0.0266*2)
-        self.bg_depth *= -1000.0
-        self.bg_depth /= (0.0266*2)
-        heightMap, contact_mask, contact_height = self.smooth_heightMap(heightMap)
-        normal = generate_normals(heightMap)
+        # Scale current depth
+        hMap = heightMap * self._scale
+        
+        # Smooth and get mask
+        hMap_smoothed, contact_mask, contact_height = self.smooth_heightMap(hMap, self._pre_scaled_bg)
+        
+        # Generate normals
+        normal = generate_normals(hMap_smoothed)
         img_n = preproc_mlp(normal)
-        self.model.eval()
-        sim_img_r = self.model(img_n).cpu().detach().numpy()
+        
+        with torch.no_grad():
+            sim_img_r = self.model(img_n).cpu().numpy()
 
-        sim_img = sim_img_r.reshape(320,240,3)-self.bg_render
-        sim_img *= (1*255.0)
+        sim_img = sim_img_r.reshape(320, 240, 3) - self.bg_render
+        sim_img *= 255.0
         sim_img += self.background
+        
         if not shadow:
-            sim_img[sim_img<0.0] = 0.0
-            sim_img[sim_img>255.0] = 255.0
-            return sim_img.astype(np.uint8)
+            return np.clip(sim_img, 0, 255).astype(np.uint8)
 
-        # light positions in pixel coordinate
+        # Light positions in pixel coordinate
         light_type = "spot"
         light_r = [-40, -120, 130.0]
         light_g = [-40, 360, 130.0]
         light_b = [500, 120, 100.0]
 
-        # generate shadow from rgb channel respectively
-        shadow_g = 1 - (1-planar_shadow(light_g, heightMap, light_type)) * (1-contact_mask)
-        shadow_b = 1 - (1-planar_shadow(light_b, heightMap, light_type)) * (1-contact_mask)
-        shadow_r = 1 - (1-planar_shadow(light_r, heightMap, light_type)) * (1-contact_mask)
+        # Generate shadow from rgb channel respectively
+        shadow_g = 1 - (1 - planar_shadow(light_g, hMap_smoothed, light_type)) * (1 - contact_mask)
+        shadow_b = 1 - (1 - planar_shadow(light_b, hMap_smoothed, light_type)) * (1 - contact_mask)
+        shadow_r = 1 - (1 - planar_shadow(light_r, hMap_smoothed, light_type)) * (1 - contact_mask)
 
-        shadow_sim_img = sim_img.copy()
-        shadow_sim_img[:,:,0] *= np.clip(shadow_b+0.65,0,1)
-        shadow_sim_img[:,:,1] *= np.clip(shadow_r+0.65,0,1)
-        shadow_sim_img[:,:,2] *= np.clip(shadow_g+0.65,0,1)
-        # # add shadow
-        # shadow_sim_img = cv2.GaussianBlur(shadow_sim_img.astype(np.float32),(pr.kernel_size,pr.kernel_size),0)
-        shadow_sim_img[sim_img<0.0] = 0.0
-        shadow_sim_img[sim_img>255.0] = 255.0
-        return shadow_sim_img.astype(np.uint8)
+        sim_img[:,:,0] *= np.clip(shadow_b + 0.65, 0, 1)
+        sim_img[:,:,1] *= np.clip(shadow_r + 0.65, 0, 1)
+        sim_img[:,:,2] *= np.clip(shadow_g + 0.65, 0, 1)
+
+        return np.clip(sim_img, 0, 255).astype(np.uint8)

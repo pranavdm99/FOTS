@@ -1,8 +1,6 @@
-
 import cv2
 import torch
 import numpy as np
-import pandas as pd
 import copy
 seed = 42
 torch.seed = seed
@@ -12,21 +10,20 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 def preproc_mlp(normal) -> torch.Tensor:
     """ Preprocess image for input to model.
 
-    Args: image: OpenCV image in BGR format
+    Args: normal: Normal map array
     Return: tensor of shape (R*C,5) where R=320 and C=240 for DIGIT images
-    5-columns are: X,Y,R,G,B
+    5-columns are: X,Y,Nx,Ny,Nz
 
     """
     xy_coords = np.flip(np.column_stack(np.where(np.all(normal>=-100, axis=2))), axis=1)
     nxyz = np.reshape(normal, (np.prod(normal.shape[:2]), 3))
-    # pixel_numbers = np.expand_dims(np.arange(1, xy_coords.shape[0] + 1), axis=1)
-    value_base = np.hstack([ xy_coords, nxyz])
-    df_base = pd.DataFrame(value_base, columns=['X', 'Y', 'Nx', 'Ny', 'Nz'])
-    df_base['X'] = df_base['X'] / 240
-    df_base['Y'] = df_base['Y'] / 320
-    # df_base.to_csv("data.csv")
-    # del df_base['pixel_number']
-    test_tensor = torch.tensor(df_base[['X', 'Y', 'Nx', 'Ny', 'Nz']].values, dtype=torch.float32).to(device)
+    value_base = np.hstack([xy_coords.astype(np.float32), nxyz.astype(np.float32)])
+    
+    # Normalize X, Y coordinates to [0, 1] relative to sensor resolution
+    value_base[:, 0] /= 240.0
+    value_base[:, 1] /= 320.0
+    
+    test_tensor = torch.tensor(value_base, dtype=torch.float32).to(device)
     return test_tensor
 
 
