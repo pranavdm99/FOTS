@@ -1,5 +1,9 @@
 # FOTS-mujoco: An example of FOTS simulation model in MuJoCo
 
+**Optimized Fork for Tactile-Guided Insertion**
+
+*(Derivative of Rancho Zhao's [FOTS-mujoco](https://github.com/Rancho-zhao/FOTS))*
+
 This branch is an integrated MuJoCo simulation example with FOTS. It is adapted from [GelSightMujoco](https://github.com/rlamprell/GelSightMujoco) and [mocap-control](https://github.com/kevincheng3/mocap-control) repo.
 
 ## Installation
