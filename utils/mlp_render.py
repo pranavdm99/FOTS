@@ -30,6 +30,12 @@ def generate_normals(height_map):
     right = height_map[1:h - 1, 2:w]  # z(x,y+1)
     dzdx = (bot - top) / 2.0
     dzdy = (right - left) / 2.0
+    
+    # Numerical Hardening: Capture and neutralize physical divergence
+    dzdx = np.nan_to_num(dzdx, nan=0.0, posinf=0.0, neginf=0.0)
+    dzdy = np.nan_to_num(dzdy, nan=0.0, posinf=0.0, neginf=0.0)
+    dzdx = np.clip(dzdx, -10.0, 10.0)
+    dzdy = np.clip(dzdy, -10.0, 10.0)
     direction = np.ones((h - 2, w - 2, 3))
     direction[:, :, 0] = dzdy
     direction[:, :, 1] = -dzdx
@@ -80,8 +86,13 @@ class MLPRender:
         # Gaussian smoothing is expensive; reduced iterations for speed
         kernel_size = [21, 11, 5]
         for ks in kernel_size:
+            # Sanitize height_map to prevent NaN-blooming during blur
+            height_map = np.nan_to_num(height_map, nan=0.0)
             height_map = cv2.GaussianBlur(height_map.astype(np.float32), (ks, ks), 0)
-            height_map[contact_mask] = zq_back[contact_mask]
+            
+            # Sanitize zq_back before copy-back
+            clean_zq = np.nan_to_num(zq_back, nan=0.0)
+            height_map[contact_mask] = clean_zq[contact_mask]
         
         return height_map, contact_mask_0, diff_depth
 

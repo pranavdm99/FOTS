@@ -15,8 +15,15 @@ def preproc_mlp(normal) -> torch.Tensor:
     5-columns are: X,Y,Nx,Ny,Nz
 
     """
-    xy_coords = np.flip(np.column_stack(np.where(np.all(normal>=-100, axis=2))), axis=1)
-    nxyz = np.reshape(normal, (np.prod(normal.shape[:2]), 3))
+    # Ensure we always have a full (320x240) coordinate grid regardless of NaNs
+    R, C = normal.shape[:2]
+    yy, xx = np.meshgrid(np.arange(R), np.arange(C), indexing='ij')
+    xy_coords = np.stack([xx.flatten(), yy.flatten()], axis=1)
+    
+    # Flatten normal map and sanitize NaNs/Infs
+    nxyz = np.reshape(normal, (R * C, 3))
+    nxyz = np.nan_to_num(nxyz, nan=0.0, posinf=1.0, neginf=-1.0)
+    
     value_base = np.hstack([xy_coords.astype(np.float32), nxyz.astype(np.float32)])
     
     # Normalize X, Y coordinates to [0, 1] relative to sensor resolution

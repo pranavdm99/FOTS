@@ -21,7 +21,11 @@ def planar_shadow(light, depth, light_type):
     P = np.mat([idx[0], idx[1], depth[idx], np.ones_like(idx[0])])
     Q = np.dot(m, P)
     if light_type=="spot":
-        Q = Q / Q[3]
+        # Add epsilon to prevent division by zero
+        Q = Q / (Q[3] + 1e-6)
+    
+    # Sanitize NaNs and Infs before the cast to uint16
+    Q = np.nan_to_num(Q, nan=0.0, posinf=65535, neginf=0)
     shadow = Q[:2].astype(np.uint16)
     # limit x,y in [320,240]
     shadow_x = np.asarray(shadow[0])
