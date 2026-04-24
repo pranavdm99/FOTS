@@ -27,8 +27,8 @@ def preproc_mlp(normal) -> torch.Tensor:
     value_base = np.hstack([xy_coords.astype(np.float32), nxyz.astype(np.float32)])
     
     # Normalize X, Y coordinates to [0, 1] relative to sensor resolution
-    value_base[:, 0] /= 240.0
-    value_base[:, 1] /= 320.0
+    value_base[:, 0] /= float(C)
+    value_base[:, 1] /= float(R)
     
     test_tensor = torch.tensor(value_base, dtype=torch.float32).to(device)
     return test_tensor

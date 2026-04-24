@@ -68,10 +68,27 @@ class MLPRender:
         self.bg_render = config['bg_render']
         self.model = config['model']
         
-        # Pre-scale initial depth to avoid recomputing every frame
-        # Conversion factor: -1000 / (0.0266 * 2)
         self._scale = -1000.0 / (0.0266 * 2.0)
         self._pre_scaled_bg = self.bg_depth * self._scale
+        
+        # Cache for resized assets to avoid recomputing every frame
+        self._asset_cache = {}
+
+    def _get_resized_assets(self, target_shape):
+        """Resizes background assets to target (R, C) and caches them."""
+        R, C = target_shape
+        if target_shape in self._asset_cache:
+            return self._asset_cache[target_shape]
+        
+        # Resize background assets
+        # background: (H, W, 3), bg_render: (H, W, 3), _pre_scaled_bg: (H, W)
+        # OpenCV resize uses (W, H)
+        bg_res = cv2.resize(self.background, (C, R), interpolation=cv2.INTER_LINEAR)
+        bg_render_res = cv2.resize(self.bg_render, (C, R), interpolation=cv2.INTER_LINEAR)
+        bg_depth_scaled_res = cv2.resize(self._pre_scaled_bg, (C, R), interpolation=cv2.INTER_LINEAR)
+        
+        self._asset_cache[target_shape] = (bg_res, bg_render_res, bg_depth_scaled_res)
+        return self._asset_cache[target_shape]
 
     def smooth_heightMap(self, height_map, bg_depth):
         diff_depth = np.abs(height_map - bg_depth)
@@ -100,8 +117,12 @@ class MLPRender:
         # Scale current depth
         hMap = heightMap * self._scale
         
+        # Get assets matching current resolution
+        R, C = hMap.shape
+        curr_bg, curr_bg_render, curr_bg_depth_scaled = self._get_resized_assets((R, C))
+
         # Smooth and get mask
-        hMap_smoothed, contact_mask, contact_height = self.smooth_heightMap(hMap, self._pre_scaled_bg)
+        hMap_smoothed, contact_mask, contact_height = self.smooth_heightMap(hMap, curr_bg_depth_scaled)
         
         # Generate normals
         normal = generate_normals(hMap_smoothed)
@@ -110,18 +131,21 @@ class MLPRender:
         with torch.no_grad():
             sim_img_r = self.model(img_n).cpu().numpy()
 
-        sim_img = sim_img_r.reshape(320, 240, 3) - self.bg_render
+        sim_img = sim_img_r.reshape(R, C, 3) - curr_bg_render
         sim_img *= 255.0
-        sim_img += self.background
+        sim_img += curr_bg
         
         if not shadow:
             return np.clip(sim_img, 0, 255).astype(np.uint8)
 
-        # Light positions in pixel coordinate
+        # Light positions in pixel coordinate (nominal for 320x240)
         light_type = "spot"
-        light_r = [-40, -120, 130.0]
-        light_g = [-40, 360, 130.0]
-        light_b = [500, 120, 100.0]
+        # Scale lights based on current resolution relative to nominal 320x240
+        scale_h, scale_w = R / 320.0, C / 240.0
+        
+        light_r = [-40 * scale_h, -120 * scale_w, 130.0]
+        light_g = [-40 * scale_h, 360 * scale_w, 130.0]
+        light_b = [500 * scale_h, 120 * scale_w, 100.0]
 
         # Generate shadow from rgb channel respectively
         shadow_g = 1 - (1 - planar_shadow(light_g, hMap_smoothed, light_type)) * (1 - contact_mask)
